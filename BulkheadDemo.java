@@ -50,7 +50,9 @@ public class BulkheadDemo {
         // 2. Llegan 3 peticiones al catalogo (deberian ser instantaneas)
         for (int i = 1; i <= 3; i++) {
             int id = i;
-            servidor.submit(() -> verCatalogo(id));
+            long llegada = System.currentTimeMillis();
+            log("Catalogo " + id + " llega al servidor y espera un hilo libre...");
+            servidor.submit(() -> verCatalogo(id, llegada));
         }
 
         servidor.shutdown();
@@ -102,8 +104,9 @@ public class BulkheadDemo {
         log("Pago " + id + " terminado");
     }
 
-    static void verCatalogo(int id) {
-        log("Catalogo " + id + " respondio OK");
+    static void verCatalogo(int id, long llegada) {
+        double espera = (System.currentTimeMillis() - llegada) / 1000.0;
+        log(String.format("Catalogo %d respondio OK (espero %.1f s por un hilo)", id, espera));
     }
 
     static void log(String mensaje) {

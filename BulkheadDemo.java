@@ -1,3 +1,5 @@
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -13,6 +15,9 @@ import java.util.concurrent.TimeUnit;
  * Ejecutar:
  *   java BulkheadDemo.java sin   -> sin bulkhead: pagos se come todos los hilos y el catalogo espera
  *   java BulkheadDemo.java con   -> con bulkhead: pagos solo puede usar 2 hilos y el catalogo sigue vivo
+ *
+ * Con bulkhead, los pagos rechazados no se pierden: van a una cola de pendientes
+ * y se procesan cuando se libera un cupo.
  */
 public class BulkheadDemo {
 
@@ -21,6 +26,9 @@ public class BulkheadDemo {
 
     // EL BULKHEAD: un semaforo que deja entrar maximo 2 llamadas a pagos al mismo tiempo
     static final Semaphore bulkheadPagos = new Semaphore(2);
+
+    // Cola de pagos pendientes: aqui esperan los pagos rechazados hasta que haya cupo
+    static final Queue<Integer> pendientes = new ConcurrentLinkedQueue<>();
 
     static boolean usarBulkhead;
     static long inicio;
@@ -55,15 +63,36 @@ public class BulkheadDemo {
             llamarPasarela(id);
             return;
         }
-        // Con bulkhead: si no hay cupo, rechazamos de inmediato en vez de bloquear un hilo
+        // Con bulkhead: si no hay cupo, no bloqueamos un hilo; el pago va a la cola de pendientes
         if (!bulkheadPagos.tryAcquire()) {
-            log("Pago " + id + " RECHAZADO por el bulkhead -> fallback: 'pago pendiente'");
+            pendientes.add(id);
+            log("Pago " + id + " RECHAZADO por el bulkhead -> fallback: queda en cola de pendientes");
             return;
         }
-        try {
-            llamarPasarela(id);
-        } finally {
-            bulkheadPagos.release(); // liberar el cupo siempre
+        procesarConCupo(id);
+    }
+
+    // Procesa un pago que ya tiene cupo y, al terminar, atiende los pendientes de la cola
+    static void procesarConCupo(int id) {
+        int actual = id;
+        while (true) {
+            try {
+                llamarPasarela(actual);
+            } finally {
+                bulkheadPagos.release(); // liberar el cupo siempre
+            }
+
+            // Se libero un cupo: revisamos si hay pagos pendientes en la cola
+            Integer siguiente = pendientes.poll();
+            if (siguiente == null) {
+                return; // no hay pendientes
+            }
+            if (!bulkheadPagos.tryAcquire()) {
+                pendientes.add(siguiente); // otro lo tomara cuando termine
+                return;
+            }
+            log("Pago " + siguiente + " sale de la cola de pendientes y se procesa");
+            actual = siguiente;
         }
     }
 
